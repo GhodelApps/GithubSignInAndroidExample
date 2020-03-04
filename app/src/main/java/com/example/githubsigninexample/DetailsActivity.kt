@@ -10,13 +10,13 @@ class DetailsActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_details)
 
-        val githubId = intent.getIntExtra("github_id",0)
+        val githubId = intent.getStringExtra("github_id")
         val githubDisplayName = intent.getStringExtra("github_display_name")
         val githubEmail = intent.getStringExtra("github_email")
         val githubAvatarURL = intent.getStringExtra("github_avatar_url")
         val githubAccessToken = intent.getStringExtra("github_access_token")
 
-        github_id_textview.text = githubId.toString()
+        github_id_textview.text = githubId
         github_display_name_textview.text = githubDisplayName
         github_email_textview.text = githubEmail
         github_avatar_url_textview.text = githubAvatarURL

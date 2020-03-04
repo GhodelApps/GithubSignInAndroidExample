@@ -5,7 +5,6 @@ import android.annotation.TargetApi
 import android.app.Dialog
 import android.content.Intent
 import android.net.Uri
-import android.os.AsyncTask
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -14,10 +13,13 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
 import kotlinx.android.synthetic.main.activity_main.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import org.json.JSONTokener
 import java.io.OutputStreamWriter
-import java.lang.ref.WeakReference
 import java.net.URL
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.HttpsURLConnection
@@ -26,8 +28,13 @@ class MainActivity : AppCompatActivity() {
 
     lateinit var githubAuthURLFull: String
     lateinit var githubdialog: Dialog
-    lateinit var githubCode: String
 
+
+    var id = ""
+    var displayName = ""
+    var email = ""
+    var avatar = ""
+    var accessToken = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,7 +69,6 @@ class MainActivity : AppCompatActivity() {
     // For API 21 and above
     @Suppress("OverridingDeprecatedMember")
     inner class GithubWebViewClient : WebViewClient() {
-
         @TargetApi(Build.VERSION_CODES.LOLLIPOP)
         override fun shouldOverrideUrlLoading(
             view: WebView?,
@@ -98,138 +104,98 @@ class MainActivity : AppCompatActivity() {
         private fun handleUrl(url: String) {
             val uri = Uri.parse(url)
             if (url.contains("code")) {
-                githubCode = uri.getQueryParameter("code") ?: ""
-                GithubRequestForAccessToken(this@MainActivity, githubCode).execute()
+                val githubCode = uri.getQueryParameter("code") ?: ""
+                requestForAccessToken(githubCode)
             }
         }
     }
 
 
-    private class GithubRequestForAccessToken
-    internal constructor(context: MainActivity, authCode: String) :
-        AsyncTask<Void, Void, String>() {
-
-        private val activityReference: WeakReference<MainActivity> = WeakReference(context)
-
-        var code = ""
+    fun requestForAccessToken(code: String) {
         val grantType = "authorization_code"
-
-        init {
-            this.code = authCode
-        }
 
         val postParams =
             "grant_type=" + grantType + "&code=" + code + "&redirect_uri=" + GithubConstants.REDIRECT_URI + "&client_id=" + GithubConstants.CLIENT_ID + "&client_secret=" + GithubConstants.CLIENT_SECRET
-
-
-        override fun doInBackground(vararg params: Void): String {
-            try {
-                val url = URL(GithubConstants.TOKENURL)
-                val httpsURLConnection = url.openConnection() as HttpsURLConnection
-                httpsURLConnection.requestMethod = "POST"
-                httpsURLConnection.setRequestProperty(
-                    "Accept",
-                    "application/json"
-                );
-                httpsURLConnection.doInput = true
-                httpsURLConnection.doOutput = true
-                val outputStreamWriter = OutputStreamWriter(httpsURLConnection.outputStream)
+        GlobalScope.launch(Dispatchers.Default) {
+            val url = URL(GithubConstants.TOKENURL)
+            val httpsURLConnection =
+                withContext(Dispatchers.IO) { url.openConnection() as HttpsURLConnection }
+            httpsURLConnection.requestMethod = "POST"
+            httpsURLConnection.setRequestProperty(
+                "Accept",
+                "application/json"
+            );
+            httpsURLConnection.doInput = true
+            httpsURLConnection.doOutput = true
+            val outputStreamWriter = OutputStreamWriter(httpsURLConnection.outputStream)
+            withContext(Dispatchers.IO) {
                 outputStreamWriter.write(postParams)
                 outputStreamWriter.flush()
-                val response = httpsURLConnection.inputStream.bufferedReader()
-                    .use { it.readText() }  // defaults to UTF-8
+            }
+            val response = httpsURLConnection.inputStream.bufferedReader()
+                .use { it.readText() }  // defaults to UTF-8
+            withContext(Dispatchers.Main) {
                 val jsonObject = JSONTokener(response).nextValue() as JSONObject
 
                 val accessToken = jsonObject.getString("access_token") //The access token
 
-                return accessToken
-            } catch (e: Exception) {
-                e.printStackTrace()
-                return ""
+                // Get user's id, first name, last name, profile pic url
+                fetchGithubUserProfile(accessToken)
             }
-        }
-
-        override fun onPostExecute(result: String) {
-            // get a reference to the activity if it is still there
-            val activity = activityReference.get()
-            if (activity == null || activity.isFinishing) return
-
-            // Get user's id, first name, last name, profile pic url
-            FetchGithubUserProfile(activity, result).execute()
         }
     }
 
-    private class FetchGithubUserProfile
-    internal constructor(context: MainActivity, accessToken: String) :
-        AsyncTask<Void, Void, Void>() {
+    fun fetchGithubUserProfile(token: String) {
+        GlobalScope.launch(Dispatchers.Default) {
+            val tokenURLFull =
+                "https://api.github.com/user"
 
-        private val activityReference: WeakReference<MainActivity> = WeakReference(context)
+            val url = URL(tokenURLFull)
+            val httpsURLConnection =
+                withContext(Dispatchers.IO) { url.openConnection() as HttpsURLConnection }
+            httpsURLConnection.requestMethod = "GET"
+            httpsURLConnection.setRequestProperty("Authorization", "Bearer $token")
+            httpsURLConnection.doInput = true
+            httpsURLConnection.doOutput = false
+            val response = httpsURLConnection.inputStream.bufferedReader()
+                .use { it.readText() }  // defaults to UTF-8
+            val jsonObject = JSONTokener(response).nextValue() as JSONObject
+            Log.i("GitHub Access Token: ", token)
+            accessToken = token
 
-        var token = ""
+            // GitHub Id
+            val githubId = jsonObject.getInt("id")
+            Log.i("GitHub Id: ", githubId.toString())
+            id = githubId.toString()
 
-        init {
-            this.token = accessToken
+            // GitHub Display Name
+            val githubDisplayName = jsonObject.getString("login")
+            Log.i("GitHub Display Name: ", githubDisplayName)
+            displayName = githubDisplayName
+
+            // GitHub Email
+            val githubEmail = jsonObject.getString("email")
+            Log.i("GitHub Email: ", githubEmail)
+            email = githubEmail
+
+            // GitHub Profile Avatar URL
+            val githubAvatarURL = jsonObject.getString("avatar_url")
+            Log.i("Github Profile Avatar URL: ", githubAvatarURL)
+            avatar = githubAvatarURL
+
+            openDetailsActivity()
         }
-
-        val tokenURLFull =
-            "https://api.github.com/user"
+    }
 
 
-        @SuppressLint("LongLogTag")
-        override fun doInBackground(vararg params: Void): Void? {
-            try {
-                val url = URL(tokenURLFull)
-                val httpsURLConnection = url.openConnection() as HttpsURLConnection
-                httpsURLConnection.requestMethod = "GET"
-                httpsURLConnection.setRequestProperty("Authorization", "Bearer $token")
-                httpsURLConnection.doInput = true
-                httpsURLConnection.doOutput = false
-                val response = httpsURLConnection.inputStream.bufferedReader()
-                    .use { it.readText() }  // defaults to UTF-8
-                val jsonObject = JSONTokener(response).nextValue() as JSONObject
-
-                val activity = activityReference.get()
-
-                Log.i("GitHub Access Token: ", token)
-
-                // GitHub Id
-                val githubId = jsonObject.getInt("id")
-                Log.i("GitHub Id: ", githubId.toString())
-
-                // GitHub Display Name
-                val githubDisplayName =
-                    jsonObject.getString("login")
-                Log.i("GitHub Display Name: ", githubDisplayName)
-
-                // GitHub Email
-                val githubEmail =
-                    jsonObject.getString("email")
-                Log.i("GitHub Email: ", githubEmail)
-
-                // GitHub Profile Avatar URL
-                val githubAvatarURL =
-                    jsonObject.getString("avatar_url")
-                Log.i("Github Profile Avatar URL: ", githubAvatarURL)
-
-                val myIntent = Intent(activity, DetailsActivity::class.java)
-                myIntent.putExtra("github_id", githubId)
-                myIntent.putExtra("github_display_name", githubDisplayName)
-                myIntent.putExtra("github_email", githubEmail)
-                myIntent.putExtra("github_avatar_url", githubAvatarURL)
-                myIntent.putExtra("github_access_token", token)
-                activity?.startActivity(myIntent)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-            return null
-        }
-
-        override fun onPostExecute(result: Void?) {
-            // get a reference to the activity if it is still there
-            val activity = activityReference.get()
-            if (activity == null || activity.isFinishing) return
-            // Add your code here....
-        }
+    fun openDetailsActivity() {
+        val myIntent = Intent(this, DetailsActivity::class.java)
+        myIntent.putExtra("github_id", id)
+        myIntent.putExtra("github_display_name", displayName)
+        myIntent.putExtra("github_email", email)
+        myIntent.putExtra("github_avatar_url", avatar)
+        myIntent.putExtra("github_access_token", accessToken)
+        startActivity(myIntent)
     }
 
 }
